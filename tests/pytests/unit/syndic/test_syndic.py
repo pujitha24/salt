@@ -120,12 +120,11 @@ def test_forward_events_return_pub_syndic_with_exception_once(caplog):
         syndic_manager._forward_events()
         tries += 1
 
-    assert caplog.text.count("Unable to call") == 2
-    assert syndic_manager._mark_master_dead.call_args_list.count(call(master1)) == 1
-    assert syndic_manager._mark_master_dead.call_args_list.count(call(master2)) == 1
+    assert caplog.text.count("Unable to call") == 1
+    assert syndic_manager._mark_master_dead.call_args_list == [call(master1)]
     assert syndic_manager.tries == collections.defaultdict(int)
-    assert syndic_manager._syndics[master1].result()._return_pub_multi.call_count == 2
-    assert syndic_manager._syndics[master2].result()._return_pub_multi.call_count == 1
+    assert syndic_manager._syndics[master1].result()._return_pub_multi.call_count == 1
+    assert syndic_manager._syndics[master2].result()._return_pub_multi.call_count == 2
 
 
 def test_forward_events_return_pub_syndic_exception_syndic_retries_set(caplog):
@@ -229,3 +228,26 @@ def test_delayed_queue_prevents_memory_leak():
     assert final_delayed_size <= initial_delayed_size + (
         3 * len(syndic_manager._syndics)
     )
+
+
+async def test_return_pub_syndic_sync_reply_is_stored_as_future():
+    """
+    _return_pub_multi(sync=True) returns the reply itself. Make sure a second
+    call does not choke on a non-future stored in pub_futures.
+    """
+    syndic_manager = _syndic_manager()
+    syndic_manager._return_retry_timer = MagicMock(return_value=5)
+    syndic_manager._mark_master_dead = MagicMock()
+    for syndic in syndic_manager._syndics.values():
+        syndic.done.return_value = True
+        syndic.exception.return_value = False
+        syndic.result.return_value._return_pub_multi.return_value = "reply"
+
+    assert syndic_manager._return_pub_syndic([{"jid": "1"}], master_id="master1")
+    future, _ = syndic_manager.pub_futures["master1"]
+    assert future.done()
+    assert future.result() == "reply"
+
+    # Previously raised AttributeError: 'str' object has no attribute 'done'
+    assert syndic_manager._return_pub_syndic([{"jid": "2"}], master_id="master1")
+    syndic_manager._mark_master_dead.assert_not_called()

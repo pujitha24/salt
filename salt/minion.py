@@ -6179,11 +6179,21 @@ class SyndicManager(MinionBase):
                     continue
                 else:
                     self.tries = collections.defaultdict(int)
-            # XXX This does not make sense
+            # With sync=True the call returns the reply itself, not a future.
+            # Wrap it so the checks above can inspect done()/exception() on
+            # the next pass.
             future = asyncio.Future()
-            future = getattr(syndic_future.result(), func)(
-                values, "_syndic_return", timeout=self._return_retry_timer(), sync=True
-            )
+            try:
+                future.set_result(
+                    getattr(syndic_future.result(), func)(
+                        values,
+                        "_syndic_return",
+                        timeout=self._return_retry_timer(),
+                        sync=True,
+                    )
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                future.set_exception(exc)
             self.pub_futures[master] = (future, values)
             return True
         # Loop done and didn't exit: wasn't sent, try again later
